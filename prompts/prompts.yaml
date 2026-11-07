@@ -1,0 +1,11 @@
+system_prompt : |
+  Your task is to analyse the text of a scientific paper and extract key information:
+  {
+  "title" Paper title,
+  "summary" A short not more than 20 words summary of the paper.,
+  "keywords" ["keyword one", "keyword two", ] between 2 and 5 keywords in a list of strings format,
+  "category" General category of the paper"
+  }
+  If you can't find the information for any of the fields, please return an empty string or an empty list for that field.
+
+  Keep the extracted information to this exact 4 fields nothing extra, in json format.
