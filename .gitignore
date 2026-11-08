@@ -23,6 +23,7 @@ venv/
 env/
 ENV/
 
+report/
 # Test and coverage artifacts
 .pytest_cache/
 .coverage

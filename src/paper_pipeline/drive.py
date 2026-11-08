@@ -13,6 +13,14 @@ load_dotenv(".env")
 logger: logging.Logger = logging.getLogger(__name__)
 
 
+def is_pdf(file_path: Path) -> bool:
+    try:
+        with open(file_path, "rb") as f:
+            return f.read(5) == b"%PDF-"
+    except OSError:
+        return False
+
+
 def check_drive_folder(folder_path: str | Path) -> list[str]:
     """Find PDF files in a synchronized Drive folder that are not in the database.
 
@@ -26,9 +34,7 @@ def check_drive_folder(folder_path: str | Path) -> list[str]:
     Raises:
         FileNotFoundError: If ``folder_path`` does not exist or is not a directory.
     """
-    logger.info(
-        "Checking synchronized Drive folder for new papers: %s", folder_path
-    )
+    logger.info("Checking synchronized Drive folder for new papers: %s", folder_path)
 
     folder = Path(folder_path)
     if not folder.exists() or not folder.is_dir():
@@ -38,9 +44,7 @@ def check_drive_folder(folder_path: str | Path) -> list[str]:
         )
 
     pdf_files = [
-        file.name
-        for file in folder.iterdir()
-        if file.is_file() and file.suffix.lower() == ".pdf"
+        file.name for file in folder.iterdir() if file.is_file() and is_pdf(file)
     ]
     if not pdf_files:
         logger.info("No PDF files found in folder: %s", folder_path)
@@ -55,17 +59,15 @@ def check_drive_folder(folder_path: str | Path) -> list[str]:
         present_files_clean = {
             row[0].strip().lower() for row in cursor.fetchall() if row[0]
         }
-        logger.debug(
-            "Files already present in the database: %s", present_files_clean
-        )
+        logger.debug("Files already present in the database: %s", present_files_clean)
     finally:
         conn.close()
 
     new_files = []
     for file in pdf_files:
         stem_name = (
-            file[:-4] if file.lower().endswith(".pdf") else file
-        ).strip().lower()
+            (file[:-4] if file.lower().endswith(".pdf") else file).strip().lower()
+        )
         if stem_name not in present_files_clean:
             new_files.append(file)
 

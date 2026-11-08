@@ -1,11 +1,12 @@
 import logging
 import os
+from datetime import timedelta
 from pathlib import Path
 
 from airflow.sdk import dag, task
+from discord_webhook import DiscordWebhook
 from dotenv import load_dotenv
 from pendulum import datetime
-from discord_webhook import DiscordWebhook
 
 from paper_pipeline.database import database_inserter, initialize_database
 from paper_pipeline.drive import check_drive_folder
@@ -17,15 +18,20 @@ logger = logging.getLogger(__name__)
 
 
 @dag(
-    schedule="@daily",
-    start_date=datetime(2025, 1, 1),
+    schedule=None,
+    start_date=datetime(2025, 11, 1),
     description=(
         "Checks for new research papers, extracts metadata, updates the library, "
         "and notifies Discord."
     ),
-    tags=["team_a", "source_a"],
+    tags=["papers", "drive"],
     catchup=False,
-    max_consecutive_failed_dag_runs=3,
+    max_active_runs=1,
+    default_args={
+        "owner": "airflow",
+        "retries": 1,
+        "retry_delay": timedelta(minutes=2),
+    },
 )
 def paper_pipeline() -> None:
     """Define the daily workflow for processing new research papers.
@@ -61,7 +67,7 @@ def paper_pipeline() -> None:
         Returns:
             list[str]: Names of new PDF files, including their extensions.
         """
-        folder_path = Path(os.environ["GOOGLE_DRIVE_FOLDER_PATH"]) / "papers"
+        folder_path = Path(os.environ["PAPERS_GOOGLE_DRIVE_FOLDER_PATH"])
         new_files = check_drive_folder(folder_path=folder_path)
         logger.info("Found %d new paper(s).", len(new_files))
         return new_files
@@ -86,9 +92,7 @@ def paper_pipeline() -> None:
         created_markdown_files = []
         for file_name in files_to_process:
             logger.info("Converting %s to text", file_name)
-            full_path = (
-                Path(os.getenv("GOOGLE_DRIVE_FOLDER_PATH")) / "papers" / file_name
-            )
+            full_path = Path(os.getenv("PAPERS_GOOGLE_DRIVE_FOLDER_PATH")) / file_name
             output_file_path = converter_pdf_to_markdown(full_path)
             created_markdown_files.append(str(output_file_path))
         logger.info("Created %d Markdown file(s).", len(created_markdown_files))
@@ -162,9 +166,7 @@ def paper_pipeline() -> None:
         database_inserter(
             extracted_paper_metadata, database_url=os.getenv("DATABASE_URL")
         )
-        logger.info(
-            "Saved %d paper(s) to the database.", len(extracted_paper_metadata)
-        )
+        logger.info("Saved %d paper(s) to the database.", len(extracted_paper_metadata))
         return len(extracted_paper_metadata)
 
     @task
@@ -184,7 +186,7 @@ def paper_pipeline() -> None:
             return 0
 
         output_html_path = (
-            Path(os.getenv("GOOGLE_DRIVE_FOLDER_PATH")) / "output" / "index.html"
+            Path(os.getenv("OUTPUTS_GOOGLE_DRIVE_FOLDER_PATH")) / "index.html"
         )
         generate_static_html(
             database_url=os.getenv("DATABASE_URL"), output_path=output_html_path
