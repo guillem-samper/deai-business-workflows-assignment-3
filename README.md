@@ -13,26 +13,26 @@ separately.
 
 - Python 3.13
 - [uv](https://docs.astral.sh/uv/getting-started/installation/)
-- An OpenAI-compatible LLM service reachable from the Airflow processes
+- An OpenAI-compatible LLM service (e.g., LM Studio) reachable from the Airflow processes
 - A synchronized folder containing the PDFs to process
-- A Discord webhook for end-to-end runs that add papers
+- A Discord webhook URL for notifications
 
 The dependency versions are recorded in `uv.lock`. Keep this file committed so
 new installations can recreate the same environment.
 
-## Install
+## Installation & Setup
 
+### 1. Install Dependencies
 Run these commands from the repository root:
 
 ```bash
 uv sync --frozen
 ```
 
-`uv sync` creates `.venv` and installs the project, including Airflow and the
+This creates a `.venv` virtual environment and installs all dependencies, including Airflow and the
 `paper_pipeline` package used by the DAG.
 
-## Configure the pipeline
-
+### 2. Configure Environment Variables
 Create a local `.env` file in the repository root. It is ignored by Git; do not
 commit secrets such as webhook URLs.
 
@@ -52,7 +52,7 @@ LOCAL_LLM_URL=http://localhost:8000/v1
 # Optional; defaults to google/gemma-4-e2b.
 LLM_MODEL_NAME=your-model-name
 
-# Required for a successful notification when new papers are added.
+# Required for Discord notifications when new papers are added.
 # Use a test webhook for local development.
 PRODUCTION_DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
 
@@ -63,6 +63,9 @@ MARKDOWN_EXTRACTIONS_FOLDER=/absolute/path/to/repository/data/markdown
 Replace the example paths and values with your own. Create the parent folder of
 the SQLite file before running the DAG, for example:
 
+### 3. Prepare the Directories
+Before starting Airflow, create the necessary local folders based on the paths you defined in your `.env` file:
+
 ```bash
 mkdir -p database
 ```
@@ -71,7 +74,7 @@ mkdir -p database
 to Python's `sqlite3.connect`; use a filesystem path such as
 `/path/to/database/papers.db`, **not** `sqlite:///...`.
 
-Put PDFs in:
+Place your PDFs in:
 
 ```text
 <GOOGLE_DRIVE_FOLDER_PATH>/papers/
@@ -81,9 +84,6 @@ The DAG stores Markdown files in `MARKDOWN_EXTRACTIONS_FOLDER` (default
 `data/markdown/`) and writes the generated library to
 `<GOOGLE_DRIVE_FOLDER_PATH>/output/index.html`.
 
-The current code uses the synchronized local folder and does not read
-`credentials.json` or `token.json`; those files are not needed to run this
-pipeline.
 
 ## Run Airflow locally
 
@@ -123,28 +123,21 @@ daily; unpausing it enables its schedule as well as manual runs.
 
 ## What a DAG run does
 
-1. Creates the `papers_table` SQLite table if necessary.
-2. Finds PDF files in the synchronized `papers/` folder that are not already
-   recorded in the database.
-3. Converts those PDFs to Markdown and requests structured metadata from the
-   configured LLM.
-4. Saves the extracted metadata to SQLite.
-5. Regenerates the static HTML library if papers were added.
-6. Sends a Discord notification if papers were added.
+1. **Database Init:** Creates the `papers_table` SQLite table if necessary.
+2. **File Scan:** Finds PDF files in the synchronized `papers/` folder that are not already recorded in the database.
+3. **Extraction:** Converts those PDFs to Markdown and requests structured metadata from the configured LLM.
+4. **Storage:** Saves the extracted metadata to SQLite.
+5. **Generation:** Regenerates the static HTML library if papers were added.
+6. **Notification:** Sends a Discord notification if papers were added.
 
-For a first test, use a small sample PDF, a disposable SQLite database, and a
-test Discord webhook. The webhook is used only when new papers are saved, but
-the notification task still needs a valid URL for a successful end-to-end run
-that reaches it.
 
 ## Development notes
 
-- The LLM helper currently truncates Markdown to 1,000 characters for
+- **LLM Truncation:** The LLM helper currently truncates Markdown to 1,000 characters for
   debugging, so metadata from a local run may be based on only the beginning of
   a paper.
-- Airflow's `standalone` command is for local development and evaluation, not
+- **Production Limits:** Airflow's `standalone` command is for local development and evaluation, not
   production. A production deployment needs an appropriate Airflow executor
   and persistent metadata database, plus secure management of environment
   variables and secrets.
-- Do not use a production Discord webhook or production paper database for
-  local testing.
+- **Credential Management:** Because the code interacts with a local filesystem sync, it bypasses the Google API entirely.
