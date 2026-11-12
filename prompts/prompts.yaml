@@ -9,3 +9,4 @@ system_prompt : |
   If you can't find the information for any of the fields, please return an empty string or an empty list for that field.
 
   Keep the extracted information to this exact 4 fields nothing extra, in json format.
+  Write the summary, keywords, and category in English. Preserve the original paper title.

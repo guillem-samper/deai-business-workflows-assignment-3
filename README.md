@@ -1,9 +1,9 @@
 # Research Paper Pipeline
 
-An Apache Airflow pipeline that scans a locally synchronized Google Drive
-folder for new PDF papers, converts them to Markdown, extracts metadata with an
-OpenAI-compatible LLM, saves the metadata to SQLite, generates a static HTML
-library, and sends a Discord notification.
+An Apache Airflow workflow that scans a locally synchronized Google Drive
+folder for new PDF papers, converts them to
+Markdown, extracts metadata with a locally served LLM, stores records in SQLite,
+generates a searchable static HTML library, and sends a Discord notification.
 
 The pipeline reads PDFs from a **local folder**. It does not authenticate to or
 download files from the Google Drive API itself; configure a Drive sync client

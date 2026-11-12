@@ -62,18 +62,22 @@ def get_structured_response(
         updated conversation history.
 
     Notes:
-        For debugging, Markdown longer than 1000 characters is truncated before
-        it is sent to the LLM.
+        LLM_MAX_INPUT_CHARS optionally limits the paper text. Its default of 0
+        sends the complete Markdown; configure it for the local model's context.
     """
     logger.debug("Calling LLM with system prompt: %s", system_prompt)
     logger.debug("Calling LLM with %d characters of Markdown.", len(markdown_text))
 
-    # Keep local LLM requests short while debugging.
-    # TODO: DELETE THIS DEBUGGING CODE
-    if len(markdown_text) > 1000:
-        logger.debug("Markdown text is too long, truncating for debugging purposes.")
-        markdown_text = markdown_text[:1000] + " ... [truncated]"
-    
+    max_input_chars = int(os.getenv("LLM_MAX_INPUT_CHARS", "0"))
+    if max_input_chars < 0:
+        raise ValueError("LLM_MAX_INPUT_CHARS must be 0 or a positive integer.")
+    if max_input_chars and len(markdown_text) > max_input_chars:
+        logger.warning(
+            "Limiting LLM input from %d to %d characters.",
+            len(markdown_text), max_input_chars,
+        )
+        markdown_text = markdown_text[:max_input_chars] + "\n[Paper text truncated]"
+
     messages.append({"role": "user", "content": markdown_text})
     response = client.beta.chat.completions.parse(
         model=os.getenv("LLM_MODEL_NAME", "google/gemma-4-e2b"),
@@ -86,6 +90,8 @@ def get_structured_response(
     logger.debug("LLM response: %s", response)
 
     paper_info = response.choices[0].message.parsed
+    if paper_info is None:
+        raise ValueError("The LLM did not return structured paper metadata.")
     logger.info("Received structured metadata from the LLM.")
     messages.append({"role": "assistant", "content": paper_info})
 

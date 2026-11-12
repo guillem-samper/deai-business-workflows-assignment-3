@@ -8,7 +8,12 @@ from discord_webhook import DiscordWebhook
 from dotenv import load_dotenv
 from pendulum import datetime
 
-from paper_pipeline.database import database_inserter, initialize_database
+from paper_pipeline.database import (
+    database_inserter,
+    get_pending_discord_papers,
+    initialize_database,
+    mark_discord_papers_notified,
+)
 from paper_pipeline.drive import check_drive_folder
 from paper_pipeline.parser import converter_pdf_to_markdown, get_llm_response
 from paper_pipeline.reporter import generate_static_html
@@ -18,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 @dag(
-    schedule=None,
+    schedule=os.getenv("PAPER_PIPELINE_SCHEDULE", "@daily") or None,
     start_date=datetime(2025, 11, 1),
     description=(
         "Checks for new research papers, extracts metadata, updates the library, "
@@ -34,7 +39,7 @@ logger = logging.getLogger(__name__)
     },
 )
 def paper_pipeline() -> None:
-    """Define the daily workflow for processing new research papers.
+    """Define the workflow for processing new research papers.
 
     Args:
         None.
@@ -94,7 +99,8 @@ def paper_pipeline() -> None:
             logger.info("Converting %s to text", file_name)
             full_path = Path(os.getenv("PAPERS_GOOGLE_DRIVE_FOLDER_PATH")) / file_name
             output_file_path = converter_pdf_to_markdown(full_path)
-            created_markdown_files.append(str(output_file_path))
+            if output_file_path is not None:
+                created_markdown_files.append(str(output_file_path))
         logger.info("Created %d Markdown file(s).", len(created_markdown_files))
         return created_markdown_files
 
@@ -196,30 +202,48 @@ def paper_pipeline() -> None:
 
     @task
     def notify_discord(number_of_new_papers: int) -> None:
-        """Send a Discord notification when new papers have been added.
+        """Deliver pending notifications, including papers from earlier runs.
 
         Args:
-            number_of_new_papers (int): Number of papers added during this run.
+            number_of_new_papers (int): Papers added during this run. Passing the
+                HTML task's result ensures rendering finishes before delivery;
+                the database determines which papers still need notification.
 
         Returns:
             None.
         """
-        if number_of_new_papers > 0:
-            logger.info(
-                "Notifying Discord about %d new paper(s).", number_of_new_papers
+        notifications_enabled = os.getenv(
+            "DISCORD_NOTIFICATIONS_ENABLED", "true"
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        if not notifications_enabled:
+            logger.info("Discord notifications are disabled for this environment.")
+            return
+
+        database_url = os.environ["DATABASE_URL"]
+        pending_filenames = get_pending_discord_papers(database_url)
+        if not pending_filenames:
+            logger.info("No pending papers to notify Discord about.")
+            return
+
+        logger.info(
+            "Notifying Discord about %d pending paper(s); %d added this run.",
+            len(pending_filenames), number_of_new_papers,
+        )
+        webhook_url = os.getenv("PRODUCTION_DISCORD_WEBHOOK_URL")
+        if not webhook_url:
+            raise ValueError(
+                "Set PRODUCTION_DISCORD_WEBHOOK_URL or disable Discord notifications."
             )
-            webhook_url = os.getenv("PRODUCTION_DISCORD_WEBHOOK_URL")
-            webhook = DiscordWebhook(
-                url=webhook_url,
-                content=(
-                    f"{number_of_new_papers} new papers have been added "
-                    "to the database!"
-                ),
-            )
-            webhook.execute()
-            logger.info("Discord notification sent.")
-        else:
-            logger.info("No new papers to notify Discord about.")
+        count = len(pending_filenames)
+        message = (
+            "1 new paper has been added to the library!" if count == 1
+            else f"{count} new papers have been added to the library!"
+        )
+        webhook = DiscordWebhook(url=webhook_url, content=message)
+        response = webhook.execute()
+        response.raise_for_status()
+        mark_discord_papers_notified(pending_filenames, database_url)
+        logger.info("Discord notification sent for %d paper(s).", count)
 
     # Ensure database initialization completes before scanning Drive.
     db_ready = init_db()

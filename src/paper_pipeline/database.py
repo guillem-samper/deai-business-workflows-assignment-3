@@ -10,7 +10,7 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 
 def initialize_database(database_url: str) -> None:
-    """Create the papers table if it does not already exist.
+    """Create the papers table and migrate persistent notification state.
 
     Args:
         database_url (str): SQLite database path or connection URL.
@@ -30,9 +30,17 @@ def initialize_database(database_url: str) -> None:
                 title TEXT,
                 summary TEXT,
                 keywords TEXT,
-                category TEXT
+                category TEXT,
+                discord_notified INTEGER NOT NULL DEFAULT 0
             )
             """)
+        columns = {row[1] for row in cursor.execute("PRAGMA table_info(papers_table)")}
+        if "discord_notified" not in columns:
+            # Legacy rows have no delivery history; queue them once for recovery.
+            cursor.execute(
+                "ALTER TABLE papers_table ADD COLUMN "
+                "discord_notified INTEGER NOT NULL DEFAULT 0"
+            )
         conn.commit()
         logger.info("Ensured papers_table exists in the database.")
     except sqlite3.Error:
@@ -101,3 +109,35 @@ def database_inserter(
     finally:
         if conn:
             conn.close()
+
+
+def get_pending_discord_papers(database_url: str) -> list[str]:
+    """Return filenames whose Discord notification has not been acknowledged."""
+    cursor, conn = create_database_connection(database_url=database_url)
+    try:
+        cursor.execute(
+            "SELECT filename FROM papers_table "
+            "WHERE discord_notified = 0 ORDER BY filename"
+        )
+        return [row[0] for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
+def mark_discord_papers_notified(filenames: list[str], database_url: str) -> None:
+    """Acknowledge only the papers included in a successful webhook request."""
+    if not filenames:
+        return
+
+    cursor, conn = create_database_connection(database_url=database_url)
+    try:
+        cursor.executemany(
+            "UPDATE papers_table SET discord_notified = 1 WHERE filename = ?",
+            [(filename,) for filename in filenames],
+        )
+        conn.commit()
+    except sqlite3.Error:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()

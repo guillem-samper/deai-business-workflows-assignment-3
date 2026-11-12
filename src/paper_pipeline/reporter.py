@@ -2,6 +2,7 @@
 
 import json
 import logging
+from html import escape
 from pathlib import Path
 import sqlite3
 
@@ -57,7 +58,7 @@ def generate_static_html(database_url: str, output_path: str | Path) -> Path:
             {
                 "filename": filename,
                 "title": title or filename,
-                "summary": summary or "Without Summary",
+                "summary": summary or "No summary available.",
                 "keywords": keywords,
                 "category": cat,
             }
@@ -65,27 +66,32 @@ def generate_static_html(database_url: str, output_path: str | Path) -> Path:
 
     # Build the category selector options.
     category_options = "\n".join(
-        f'<option value="{c}">{c}</option>' for c in sorted(categories)
+        f'<option value="{escape(c)}">{escape(c)}</option>' for c in sorted(categories)
     )
 
     # Render one HTML card for each paper.
     cards_html = []
     for p in papers_data:
-        kw_badges = " ".join(f'<span class="badge">{k}</span>' for k in p["keywords"])
+        kw_badges = " ".join(
+            f'<span class="badge">{escape(k)}</span>' for k in p["keywords"]
+        )
+        search_text = escape(
+            f"{p['title']} {p['summary']} {' '.join(p['keywords'])}".lower()
+        )
         card = f"""
-        <div class="paper-card" data-category="{p['category']}" data-search="{p['title'].lower()} {p['summary'].lower()} {' '.join(p['keywords']).lower()}">
-            <h3>{p['title']}</h3>
-            <p class="category"><strong>Categoria:</strong> {p['category']}</p>
-            <p class="summary">{p['summary']}</p>
+        <div class="paper-card" data-category="{escape(p['category'])}" data-search="{search_text}">
+            <h3>{escape(p['title'])}</h3>
+            <p class="category"><strong>Category:</strong> {escape(p['category'])}</p>
+            <p class="summary">{escape(p['summary'])}</p>
             <div class="keywords">{kw_badges}</div>
-            <p class="filename"><small>Fitxer: {p['filename']}</small></p>
+            <p class="filename"><small>File: {escape(p['filename'])}</small></p>
         </div>
         """
         cards_html.append(card)
 
     # Complete the HTML template, including client-side search and filtering.
     html_content = f"""<!DOCTYPE html>
-    <html lang="ca">
+    <html lang="en">
     <head>
     <meta charset="UTF-8">
     <title>Research Library</title>
@@ -103,15 +109,15 @@ def generate_static_html(database_url: str, output_path: str | Path) -> Path:
     <body>
     <h1>Research Library</h1>
     <div class="controls">
-        <input type="text" id="searchInput" placeholder="Cercar per títol, resum o paraules clau..." onkeyup="filterPapers()">
+        <input type="text" id="searchInput" placeholder="Search by title, summary, or keywords..." onkeyup="filterPapers()">
         <select id="categoryFilter" onchange="filterPapers()">
-            <option value="ALL">Totes les categories</option>
+            <option value="ALL">All categories</option>
             {category_options}
         </select>
     </div>
 
     <div id="papersList">
-        {''.join(cards_html) if cards_html else '<p>No hi ha documents a la biblioteca.</p>'}
+        {''.join(cards_html) if cards_html else '<p>No documents in the library yet.</p>'}
     </div>
 
     <script>

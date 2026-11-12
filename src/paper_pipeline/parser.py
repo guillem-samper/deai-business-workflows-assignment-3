@@ -38,6 +38,9 @@ def converter_pdf_to_markdown(file_path: Path) -> Path | None:
     try:
         logger.info("Converting %s to Markdown format", file_path)
         markdown_text = pymupdf4llm.to_markdown(str(file_path))
+        if not markdown_text.strip():
+            logger.warning("Skipping PDF with no extracted text: %s", file_path.name)
+            return None
         output_dir = Path(os.getenv("MARKDOWN_EXTRACTIONS_FOLDER", "data/markdown"))
         output_dir.mkdir(parents=True, exist_ok=True)
         output_file = output_dir / f"{file_path.stem}.md"
