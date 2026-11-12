@@ -1,143 +1,136 @@
 # Research Paper Pipeline
 
-An Apache Airflow workflow that scans a locally synchronized Google Drive
-folder for new PDF papers, converts them to
-Markdown, extracts metadata with a locally served LLM, stores records in SQLite,
-generates a searchable static HTML library, and sends a Discord notification.
+An Apache Airflow workflow that scans a locally synchronized Google Drive folder for new PDF papers, converts them to Markdown, extracts metadata with a locally served LLM, stores records in SQLite, generates a searchable static HTML library, and sends a Discord notification.
 
-The pipeline reads PDFs from a **local folder**. It does not authenticate to or
-download files from the Google Drive API itself; configure a Drive sync client
-separately.
+The DAG is in `dags/paper_pipeline_dag.py`. The processing code is in
+`src/paper_pipeline/`.
 
 ## Requirements
 
-- Python 3.13
-- [uv](https://docs.astral.sh/uv/getting-started/installation/)
+- Python 3.13 and [uv](https://docs.astral.sh/uv/getting-started/installation/).
 - An OpenAI-compatible LLM service (e.g., LM Studio) reachable from the Airflow processes
-- A synchronized folder containing the PDFs to process
-- A Discord webhook URL for notifications
+- A Google Drive folder accessible through the local filesystem.
+- A Discord webhook URL if notifications are enabled.
 
-The dependency versions are recorded in `uv.lock`. Keep this file committed so
-new installations can recreate the same environment.
+Run the terminal commands below from the repository root.
 
-## Installation & Setup
+## Setup
 
-### 1. Install Dependencies
-Run these commands from the repository root:
+### 1. Install the dependencies
 
 ```bash
 uv sync --frozen
 ```
 
-This creates a `.venv` virtual environment and installs all dependencies, including Airflow and the
-`paper_pipeline` package used by the DAG.
+This creates a `.venv` virtual environment and installs the dependencies, including Airflow and the `paper_pipeline` package used by the DAG.
 
-### 2. Configure Environment Variables
-Create a local `.env` file in the repository root. It is ignored by Git; do not
-commit secrets such as webhook URLs.
+### 2. Set up the environment variables
+
+Create a file called `.env` in the repository root. Set `PROJECT_ROOT` to the
+absolute path printed by `pwd`, then fill in the model and webhook settings.
 
 ```dotenv
-# Parent directory containing the synchronized "papers" directory.
-GOOGLE_DRIVE_FOLDER_PATH=/absolute/path/to/synchronized-drive
+PROJECT_ROOT=/absolute/path/to/this/repository
 
-# Local SQLite file path, not a SQLAlchemy URL.
-DATABASE_URL=/absolute/path/to/repository/database/papers.db
+# These are local directories for testing
+# Replace them with your Google Drive synced directories
+PAPERS_GOOGLE_DRIVE_FOLDER_PATH=${PROJECT_ROOT}/data/dev/ResearchLibrary/papers
+OUTPUTS_GOOGLE_DRIVE_FOLDER_PATH=${PROJECT_ROOT}/data/dev/ResearchLibrary/output
 
-# The YAML file containing the LLM system prompt.
-SYSTEM_PROMPTS_FILE_PATH=/absolute/path/to/repository/prompts/prompts.yaml
+DATABASE_URL=${PROJECT_ROOT}/data/dev/papers.db
+MARKDOWN_EXTRACTIONS_FOLDER=${PROJECT_ROOT}/data/dev/markdown
+SYSTEM_PROMPTS_FILE_PATH=${PROJECT_ROOT}/prompts/prompts.yaml
 
-# Base URL of a reachable OpenAI-compatible LLM service.
-LOCAL_LLM_URL=http://localhost:8000/v1
+# Set based on your local LLM, where it is hosted and its name
+LOCAL_LLM_URL=http://localhost:1234/v1
+LLM_MODEL_NAME=google/gemma-4-e2b
+# Maximum paper text sent to the model; 0 sends the full text
+LLM_MAX_INPUT_CHARS=16000
 
-# Optional; defaults to google/gemma-4-e2b.
-LLM_MODEL_NAME=your-model-name
+# Leave blank for manual runs. Set to @daily for the scheduled workflow.
+PAPER_PIPELINE_SCHEDULE=@daily
 
-# Required for Discord notifications when new papers are added.
-# Use a test webhook for local development.
-PRODUCTION_DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
-
-# Optional; defaults to data/markdown.
-MARKDOWN_EXTRACTIONS_FOLDER=/absolute/path/to/repository/data/markdown
+# Set to false to disable Discord; otherwise fill in the webhook URL
+DISCORD_NOTIFICATIONS_ENABLED=true
+PRODUCTION_DISCORD_WEBHOOK_URL=your_webhook
 ```
 
-Replace the example paths and values with your own. Create the parent folder of
-the SQLite file before running the DAG, for example:
+The `${PROJECT_ROOT}` references are expanded by `python-dotenv`. Use absolute
+paths so the Airflow processes can find the same files.
 
-### 3. Prepare the Directories
-Before starting Airflow, create the necessary local folders based on the paths you defined in your `.env` file:
+The example starts with a local test library. Create its directories:
 
 ```bash
-mkdir -p database
+mkdir -p data/dev/ResearchLibrary/papers data/dev/ResearchLibrary/output data/dev/markdown
 ```
 
-`DATABASE_URL` is named as a URL for historical reasons, but the code passes it
-to Python's `sqlite3.connect`; use a filesystem path such as
-`/path/to/database/papers.db`, **not** `sqlite:///...`.
+`DATABASE_URL` is a SQLite file path, despite its name. Its parent directory must
+exist; Airflow creates the database and table on the first run.
 
-Place your PDFs in:
+### 3. Start LM Studio (or another local LLM server)
 
-```text
-<GOOGLE_DRIVE_FOLDER_PATH>/papers/
-```
+We used `google/gemma-4-e2b`, but any other model is fine if it support structured JSON responses.
+1. Open LM Studio and download the model if needed.
+2. Load it, then open the Developer tab and start the server.
+3. Check the server's port and list the available model IDs:
 
-The DAG stores Markdown files in `MARKDOWN_EXTRACTIONS_FOLDER` (default
-`data/markdown/`) and writes the generated library to
-`<GOOGLE_DRIVE_FOLDER_PATH>/output/index.html`.
+   ```bash
+   curl -fsS http://localhost:1234/v1/models
+   ```
 
+4. Set `LOCAL_LLM_URL` to the server's base URL, including `/v1`, and set
+   `LLM_MODEL_NAME` to the exact ID returned for your chosen model.
 
-## Run Airflow locally
+Keep the model server running while processing papers.
 
-Airflow needs its own metadata database and configuration, separate from the
-pipeline's `DATABASE_URL`. Use a repository-local `AIRFLOW_HOME` for development
-so Airflow state does not depend on a machine-specific global configuration.
-The `airflow*` ignore rule excludes this local directory from Git.
+### 4. Connect the Google Drive folders
 
-From the repository root, run:
+The paths in the example `.env` are ordinary local directories. Replace
+`PAPERS_GOOGLE_DRIVE_FOLDER_PATH` and `OUTPUTS_GOOGLE_DRIVE_FOLDER_PATH` with the
+actual mounted or synchronized paths. Keep `DATABASE_URL` outside the Drive folder.
+
+### 5. Set up Discord
+
+Choose a Discord channel and copy its URL into
+`PRODUCTION_DISCORD_WEBHOOK_URL` in `.env`.
+
+For a run without Discord, set `DISCORD_NOTIFICATIONS_ENABLED=false`. Papers
+processed while it is disabled stay pending and will be notified when it is
+enabled again.
+
+## Run the pipeline
+
+Put a PDF in the configured `papers/` folder, ensure the local LLM is ready, then run:
 
 ```bash
 export AIRFLOW_HOME="$PWD/airflow"
 export AIRFLOW__CORE__DAGS_FOLDER="$PWD/dags"
-uv run airflow standalone
+export AIRFLOW__CORE__LOAD_EXAMPLES=False
+uv run --frozen airflow standalone
 ```
 
-Keep this terminal open while using Airflow. On its first start, Airflow
-initializes its local metadata database and prints the generated `admin`
-password. Open [http://localhost:8080](http://localhost:8080) and sign in with
-that password. If you need it again, it is stored in
-`$AIRFLOW_HOME/simple_auth_manager_passwords.json.generated`; do not share or
-commit it. Stop the local Airflow services with **Ctrl+C**.
-
-In another terminal, from the repository root, the same Airflow environment
-variables must be set to use the same local Airflow home:
+Keep the terminal open. Open [localhost:8080](http://localhost:8080) and log in as
+`admin` with the generated password shown in the terminal. On later starts, the
+password is available in:
 
 ```bash
-export AIRFLOW_HOME="$PWD/airflow"
-export AIRFLOW__CORE__DAGS_FOLDER="$PWD/dags"
-uv run airflow dags list
-uv run airflow dags list-import-errors
+cat "$PWD/airflow/simple_auth_manager_passwords.json.generated"
 ```
 
-Confirm that `paper_pipeline` appears and that there are no import errors. In
-the UI, unpause the DAG if it is paused, then trigger a run. It is scheduled
-daily; unpausing it enables its schedule as well as manual runs.
+Find `paper_pipeline`, unpause it, and trigger a run.
 
-## What a DAG run does
+With `PAPER_PIPELINE_SCHEDULE=@daily` runs are automatic. To enable manual scheduling, set
+`PAPER_PIPELINE_SCHEDULE=` and keep the DAG unpaused. If the setting is
+absent, the code also defaults to `@daily`.
 
-1. **Database Init:** Creates the `papers_table` SQLite table if necessary.
-2. **File Scan:** Finds PDF files in the synchronized `papers/` folder that are not already recorded in the database.
-3. **Extraction:** Converts those PDFs to Markdown and requests structured metadata from the configured LLM.
-4. **Storage:** Saves the extracted metadata to SQLite.
-5. **Generation:** Regenerates the static HTML library if papers were added.
-6. **Notification:** Sends a Discord notification if papers were added.
+Restart Airflow after editing `.env`. Stop it with **Ctrl+C**.
 
+## Check the result
 
-## Development notes
+Open the run in Airflow and inspect its task logs. After a successful run:
 
-- **LLM Truncation:** The LLM helper currently truncates Markdown to 1,000 characters for
-  debugging, so metadata from a local run may be based on only the beginning of
-  a paper.
-- **Production Limits:** Airflow's `standalone` command is for local development and evaluation, not
-  production. A production deployment needs an appropriate Airflow executor
-  and persistent metadata database, plus secure management of environment
-  variables and secrets.
-- **Credential Management:** Because the code interacts with a local filesystem sync, it bypasses the Google API entirely.
+- Markdown files are in `MARKDOWN_EXTRACTIONS_FOLDER`.
+- Metadata is in `papers_table` in the database at `DATABASE_URL`.
+- The catalog is `<OUTPUTS_GOOGLE_DRIVE_FOLDER_PATH>/index.html`.
+- If notifications are enabled and papers are pending, Discord receives a
+  message with their count. Failed deliveries stay pending for later runs.
